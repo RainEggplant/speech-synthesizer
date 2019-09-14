@@ -1,3 +1,4 @@
+% 绘制经滤波器作用后的信号波形与频谱
 function show_filtered_signal()
     L = 8000; % 信号长度
     e = generate_varied_signal(8000, 1);

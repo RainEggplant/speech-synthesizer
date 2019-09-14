@@ -22,6 +22,19 @@ H(z) = \frac {S(z)}{E(z)} = \frac {1}{1 - a_1 z^{-1} - a_2 z^{-2}}
 $$
 
 
+
+每一对共轭极点都对应一个衰减的正弦信号的特征响应。例如一对共轭极点 $$|p_i|e^{\pm j \Omega}$$ 在时域冲激响应中的贡献是 $$A|p_i|^n \mathrm{cos} (\Omega n+\varphi)$$ 。 其中极点幅度决定衰减速度， 幅角决定振荡频率。 
+
+因此，要求共振峰频率，需要先求出极点。
+
+当 $$a_1 = 1.3789$$， $$a_2 = -0.9506$$ 时，调用 `roots([1 -1.3789 0.9506])`,  得到极点为：
+$$
+p_1 = 0.6895+0.6894i, \ p_2=0.6895-0.6894i
+$$
+因此，共振峰频率 $$\Omega=\mathrm{abs}(\mathrm{angle}(p_i))=0.7854=0.25\pi$$ rad/sample。
+
+
+
 编写函数 `plot_filter` 如下（文件位于 `src/plot_filter.m`）
 
 ```matlab
@@ -62,7 +75,7 @@ end
 
 
 
-当 $$a_1 = 1.3789$$， $$a_2 = -0.9506$$ 时，调用 `plot_filter(1, [1 -1.3789 0.9506])`，得到以下结果：
+调用 `plot_filter(1, [1, -1.3789, 0.9506])`，得到以下结果：
 
 **零、极点分布图**
 
@@ -74,7 +87,7 @@ end
 
 **频率响应**
 
-从这张图上，我们能够知道上述合成模型的共振峰频率为 $$0.25 \times \pi$$ rad/sample。
+从这张图上，我们得到上述合成模型的共振峰频率为 $$0.25 \times \pi$$ rad/sample，与理论计算是一致的。
 
 ![](report.assets/1-freq_res.png)
 
@@ -487,8 +500,6 @@ end
 
 ### (1) 将 1.(1) 中滤波器的共振峰频率提高 150 Hz
 
-语音生成模型的每一对共轭极点都对应一个衰减的正弦信号的特征响应。例如一对共轭极点 $$|p_i|e^{\pm j \Omega}$$ 在时域冲激响应中的贡献是 $$A|p_i|^n \mathrm{cos} (\Omega n+\varphi)$$ 。 其中极点幅度决定衰减速度， 幅角决定振荡频率。 
-
 如果保持极点的幅度不变，使极点的幅角绝对值增大，即让上半平面的极点逆时针旋转，下半平面的顺时针旋转（但注意两者都要旋转同样角度而且不要转过负实轴 ），则可以增加共振峰的频率。
 
 在 $$sr=8000$$ Hz 的采样率下，150 Hz 模拟频率对应的数字频率应为 $$\Delta \Omega =\dfrac{2 \pi f}{sr}=0.0375 \pi$$ rad/sample。因此若要使得 1.(1) 中滤波器的共振峰频率提高 150 Hz, 则应当使其极点俯角的绝对值增大 $$0.0375 \pi$$。
@@ -584,3 +595,131 @@ sound(s_syn_t/INT16_MAX_ABS, sr);
 
 可以看到，由于频率提高，波形变得更密。从听感上，声音变成了女性的声音，但时长没有发生变化。
 
+
+
+## 探究思考
+
+### 变速 + 变调
+
+课本中提到，变速与变调可以完美地结合在一起。我针对原程序做了些许修改，得到了能同时变速、变调的合成语音算法。
+
+该算法的调用方式为 `s_syn =  speechproc_pro(filename, sr, speed, pitch, peak)`，其中 `filename` 是 pcm 音频文件的完整路径，`sr` 是采样率，`speed` 、`pitch` 是合成语音与原始语音的速度、基音频率比，`peak` 是共振峰频率的增减量。定义函数的代码如下（位于 `src/speechproc_pro.m`）：
+
+```matlab
+function s_syn = speechproc_pro(filename, sr, speed, pitch, peak)
+    % 定义常数
+    INT16_MAX_ABS = 32768;
+    FL = 80;                % 帧长
+    FL_out = round(FL/speed); % 输出语音帧长
+    WL = 240;               % 窗长
+    P = 10;                 % 预测系数个数
+    s = readspeech(filename, 100000);     % 载入语音 s
+    L = length(s);          % 读入语音长度
+    FN = floor(L/FL)-2;     % 计算帧数
+    L_out = FL_out*(FN+2); % 输出语音长度
+    % 预测滤波器
+    exc = zeros(L, 1);       % 激励信号（预测误差）
+    zi_pre = zeros(P, 1);    % 预测滤波器的状态
+    % 合成滤波器
+    exc_syn = zeros(L_out,1);   % 合成的激励信号（脉冲串）
+    s_syn = zeros(L_out,1);     % 合成语音
+    zi_syn = zeros(P,1);    % 合成滤波器的状态
+    
+    hw = hamming(WL);       % 汉明窗
+    
+    pulse_pos = 2*FL_out+1;     % 激励信号的起始位置
+    
+    % 依次处理每帧语音
+    for n = 3:FN
+        % 计算预测系数（不需要掌握）
+        s_w = s(n*FL-WL+1:n*FL).*hw;    % 汉明窗加权后的语音
+        [A, E] = lpc(s_w, P);            % 用线性预测法计算 P 个预测系数
+                                        % A是预测系数，E 会被用来计算合成激励的能量
+        
+        s_f = s((n-1)*FL+1:n*FL);       % 本帧语音，下面就要对它做处理
+
+        % 用 filter 函数和 s_f 计算激励，注意保持滤波器状态
+        [exc((n-1)*FL+1:n*FL), zi_pre] = filter(A, 1, s_f, zi_pre);
+
+        % 注意下面只有在得到 exc 后才会计算正确
+        s_Pitch = exc(n*FL-222:n*FL);
+        PT = findpitch(s_Pitch);    % 计算基音周期 PT（不要求掌握）
+        G = sqrt(E*PT);           % 计算合成激励的能量 G（不要求掌握）
+      
+
+        % 不改变预测系数，改变合成激励的长度、基音周期，改变共振峰频率，
+        % 合成新语音。
+        while pulse_pos <= n*FL_out
+           exc_syn(pulse_pos) = G;
+           pulse_pos = pulse_pos+round(PT/pitch);
+        end
+        A_new = rotate_poles(A, 2*pi*peak/sr);
+        [s_syn((n-1)*FL_out+1:n*FL_out), zi_syn] = ...
+            filter(1, A_new, exc_syn((n-1)*FL_out+1:n*FL_out), zi_syn);
+    end
+    s_syn = s_syn/INT16_MAX_ABS;
+return
+
+% 从 PCM 文件中读入语音
+function s = readspeech(filename, L)
+    fid = fopen(filename, 'r');
+    s = fread(fid, L, 'int16');
+    fclose(fid);
+return
+
+% 计算一段语音的基音周期，不要求掌握
+function PT = findpitch(s)
+    [B, A] = butter(5, 700/4000);
+    s = filter(B, A, s);
+    R = zeros(143, 1);
+    for k=1:143
+        R(k) = s(144:223)'*s(144-k:223-k);
+    end
+    [R1, T1] = max(R(80:143));
+    T1 = T1 + 79;
+    R1 = R1/(norm(s(144-T1:223-T1))+1);
+    [R2, T2] = max(R(40:79));
+    T2 = T2 + 39;
+    R2 = R2/(norm(s(144-T2:223-T2))+1);
+    [R3, T3] = max(R(20:39));
+    T3 = T3 + 19;
+    R3 = R3/(norm(s(144-T3:223-T3))+1);
+    Top = T1;
+    Rop = R1;
+    if R2 >= 0.85*Rop
+        Rop = R2;
+        Top = T2;
+    end
+    if R3 > 0.85*Rop
+        Rop = R3;
+        Top = T3;
+    end
+    PT = Top;
+return
+```
+
+
+
+### 语音合成器 GUI
+
+我们不妨做一个 GUI 界面来测试测试以上算法。效果如图：
+
+![](report.assets/14-gui.PNG)
+
+
+
+点击 “打开” 任意选择一个 pcm 文件，然后设定采样率，调整速度、基音频率和共振峰偏移，点击播放就可以听到合成语音啦！
+
+勾选 “绘制波形” 则会在播放时画出波形，
+
+![](report.assets/14-waveform.png)
+
+
+
+该代码位于 `src/speechproc_gui.m` 和 `src/speechproc_gui.fig`, 此处就不列出了。
+
+
+
+## 原创性等级
+
+均为原创。

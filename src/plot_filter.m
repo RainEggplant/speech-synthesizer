@@ -1,3 +1,6 @@
+% 绘制滤波器模型的零极点图、频率响应和单位样值响应，并求共振峰频率
+% b: 传递函数分子系数
+% a: 传递函数分母系数
 function plot_filter(b, a)
     % Plot zeros and polars
     figure;

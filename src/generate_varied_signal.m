@@ -1,3 +1,6 @@
+% 生成基音周期变化的单位样值串
+% sr: 采样率
+% duration: 信号时长
 function s = generate_varied_signal(sr, duration)
     s_len = round(sr*duration);
     s = zeros(1, s_len)';
